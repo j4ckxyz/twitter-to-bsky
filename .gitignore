@@ -13,3 +13,12 @@ test*.png
 demo.js
 mock*.js
 *.sync-conflict-*
+
+# Playwright
+playwright.config.js
+tests/
+/test-results/
+/playwright-report/
+/blob-report/
+/playwright/.cache/
+/playwright/.auth/
