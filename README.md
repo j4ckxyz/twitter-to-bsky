@@ -5,6 +5,8 @@ A tool that automatically crossposts Twitter accounts to Bluesky using the emusk
 ## Features
 
 - Crosspost multiple Twitter accounts to multiple Bluesky accounts
+- **Thread support**: Automatically detects and crossposts Twitter threads
+- **Auto-threading**: Splits long posts (>300 chars) into threaded posts on Bluesky
 - Support for images (with proper aspect ratios) and videos
 - Automatic removal of t.co links from media-only posts
 - Filter out replies, retweets, and quote tweets
@@ -97,7 +99,16 @@ First, test that the packages are installed correctly:
 node test.js
 ```
 
-Then, test fetching tweets from Twitter (optional):
+Test thread detection with any Twitter account:
+```bash
+# Analyze thread structure (no posting)
+TWITTER_AUTH_TOKEN=xxx node test-threading.js OpenAI
+
+# Test with actual Bluesky posting
+TWITTER_AUTH_TOKEN=xxx node test-threading.js OpenAI your.handle.bsky.social xxxx-xxxx-xxxx-xxxx
+```
+
+Test fetching tweets from Twitter (optional):
 ```bash
 node demo.js "your_auth_token" "twitter_username"
 ```
@@ -112,10 +123,12 @@ npm start
 This will:
 1. Fetch recent tweets from each configured Twitter account
 2. Filter out replies, retweets, and quote tweets (based on config)
-3. Download and process media (images/videos) with proper aspect ratios
-4. Remove t.co links from media-only posts
-5. Post new tweets to the corresponding Bluesky account
-6. Track posted tweets in `crosspost-log.json` to avoid duplicates
+3. **Detect Twitter threads** (self-replies) and crosspost them as Bluesky threads
+4. **Auto-split long posts** (>300 chars) into threaded posts
+5. Download and process media (images/videos) with proper aspect ratios
+6. Remove t.co links from media-only posts
+7. Post new tweets to the corresponding Bluesky account
+8. Track posted tweets in `crosspost-log.json` to avoid duplicates
 
 **Important:** Make sure to disable dry run mode in your config when you're ready to actually post!
 
@@ -150,21 +163,24 @@ To automatically crosspost at regular intervals, set up a cron job (Linux/Mac) o
 
 ## Files
 
-- `index.js`: Main crosspost script
+- `index.js`: Main crosspost script with threading support
 - `setup.js`: Interactive configuration manager
+- `test-threading.js`: Test tool for thread detection and Bluesky posting
 - `test.js`: Tests package installation
 - `demo.js`: Demo script to test Twitter API and view tweet structure
 - `config.json`: Your configuration file (auto-created by setup tool)
 - `config.example.json`: Example configuration template
-- `crosspost-log.json`: Tracks which tweets have been posted (auto-generated)
+- `crosspost-log.json`: Tracks which tweets have been posted and thread relationships (auto-generated)
 - `README.md`: This file
 
 ## Notes
 
 - The Twitter auth token is only used for reading data, never for posting
 - Each run checks for new tweets and posts them to Bluesky
+- **Threads**: When a tweet is a reply to itself (thread continuation), it will be posted as a threaded reply on Bluesky
+- **Long posts**: Posts longer than 300 characters are automatically split and posted as threads
 - Set up a cron job or task scheduler to run this periodically
-- Rate limiting: 2 second delay between posts to avoid hitting API limits
+- Rate limiting: 1-2 second delays between posts to avoid hitting API limits
 
 ## License
 

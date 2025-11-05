@@ -21,7 +21,7 @@ if (!config.twitter?.authToken) {
   process.exit(1);
 }
 
-// Load crosspost log (maps tweet IDs to Bluesky URIs)
+// Load crosspost log (maps tweet IDs to Bluesky URIs and thread info)
 let crosspostLog = { mappings: {} };
 if (existsSync('./crosspost-log.json')) {
   crosspostLog = JSON.parse(await fs.readFile('./crosspost-log.json', 'utf-8'));
@@ -204,6 +204,31 @@ async function processMediaFromTweet(tweet) {
   return null;
 }
 
+// Function to get thread tweets (replies from the same author to their own tweets)
+async function getThreadTweets(userId, rootTweetId) {
+  try {
+    // Search for replies from the user to the specific tweet
+    const result = await twitterClient.getUserTweets(userId, {
+      count: 100, // Get more tweets to find replies
+      includePromotedContent: false,
+    });
+    
+    if (!result.tweets) {
+      return [];
+    }
+    
+    // Find all tweets that are replies to the root tweet by the same user
+    const threadTweets = result.tweets.filter(tweet => 
+      tweet.in_reply_to_status_id === rootTweetId
+    );
+    
+    return threadTweets;
+  } catch (error) {
+    console.error(`  ⚠️  Failed to fetch thread tweets: ${error.message}`);
+    return [];
+  }
+}
+
 // Function to get skip reason
 function getSkipReason(tweet) {
   // Check for replies - tweet has in_reply_to_status_id field
@@ -225,8 +250,46 @@ function getSkipReason(tweet) {
   return null;
 }
 
-// Function to post to Bluesky
-async function postToBluesky(text, media, blueskyHandle, blueskyAppPassword, blueskyService = 'https://bsky.social') {
+// Function to split text into chunks for threading
+function splitTextForThreading(text, maxLength = 300) {
+  // If text fits in one post, return as is
+  if (text.length <= maxLength) {
+    return [text];
+  }
+  
+  const chunks = [];
+  let remaining = text;
+  
+  while (remaining.length > 0) {
+    if (remaining.length <= maxLength) {
+      chunks.push(remaining);
+      break;
+    }
+    
+    // Try to split at a natural boundary (sentence, then word)
+    let splitIndex = maxLength;
+    
+    // Look for sentence ending within the limit
+    const sentenceEnd = remaining.substring(0, maxLength).lastIndexOf('. ');
+    if (sentenceEnd > maxLength * 0.5) {
+      splitIndex = sentenceEnd + 1;
+    } else {
+      // Look for word boundary
+      const lastSpace = remaining.substring(0, maxLength).lastIndexOf(' ');
+      if (lastSpace > maxLength * 0.5) {
+        splitIndex = lastSpace;
+      }
+    }
+    
+    chunks.push(remaining.substring(0, splitIndex).trim());
+    remaining = remaining.substring(splitIndex).trim();
+  }
+  
+  return chunks;
+}
+
+// Function to post to Bluesky with optional threading support
+async function postToBluesky(text, media, blueskyHandle, blueskyAppPassword, blueskyService = 'https://bsky.social', replyTo = null) {
   const agent = new BskyAgent({ service: blueskyService });
   
   try {
@@ -273,11 +336,25 @@ async function postToBluesky(text, media, blueskyHandle, blueskyAppPassword, blu
       }
     }
     
-    const response = await agent.post({
+    // Build post record
+    const postRecord = {
       text: text,
-      embed: embed,
       createdAt: new Date().toISOString(),
-    });
+    };
+    
+    if (embed) {
+      postRecord.embed = embed;
+    }
+    
+    // Add reply reference if this is part of a thread
+    if (replyTo) {
+      postRecord.reply = {
+        root: replyTo.root,
+        parent: replyTo.parent,
+      };
+    }
+    
+    const response = await agent.post(postRecord);
     
     return response;
   } catch (error) {
@@ -400,6 +477,26 @@ async function processTweetsForAccount(mapping) {
       
       // Clean the tweet text (remove t.co links if they're only for media)
       const cleanedText = cleanTweetText(tweetText, tweet);
+      
+      // Check if we need to split into multiple posts
+      const textChunks = splitTextForThreading(cleanedText);
+      const needsThreading = textChunks.length > 1;
+      
+      if (needsThreading) {
+        console.log(`   🧵 Text is long (${cleanedText.length} chars), splitting into ${textChunks.length} posts`);
+      }
+      
+      // Check for Twitter thread continuation (replies from same author)
+      let threadReplies = [];
+      try {
+        threadReplies = await getThreadTweets(user.id, tweetId);
+        if (threadReplies.length > 0) {
+          console.log(`   🧵 Found ${threadReplies.length} thread continuation(s) from author`);
+        }
+      } catch (error) {
+        console.error(`   ⚠️  Failed to check for thread: ${error.message}`);
+      }
+      
       const preview = cleanedText.length > 80 
         ? cleanedText.substring(0, 80) + '...' 
         : cleanedText;
@@ -409,6 +506,12 @@ async function processTweetsForAccount(mapping) {
       
       if (isDryRun) {
         console.log(`   ⚠️  DRY RUN: Would post to @${blueskyHandle}${mediaInfo}`);
+        if (needsThreading) {
+          console.log(`   ⚠️  DRY RUN: Would create ${textChunks.length} threaded posts`);
+        }
+        if (threadReplies.length > 0) {
+          console.log(`   ⚠️  DRY RUN: Would post ${threadReplies.length} thread continuation(s)`);
+        }
         
         // In dry run, mark as "would be posted"
         crosspostLog.mappings[twitterUsername][tweetId] = {
@@ -416,35 +519,140 @@ async function processTweetsForAccount(mapping) {
           text: cleanedText,
           hasMedia: media !== null,
           mediaType: media?.type,
+          chunks: textChunks.length,
+          threadReplies: threadReplies.length,
           timestamp: new Date().toISOString()
         };
         await saveCrosspostLog();
       } else {
         try {
-          const response = await postToBluesky(
-            cleanedText,
-            media,
-            blueskyHandle, 
-            blueskyAppPassword,
-            blueskyService
-          );
+          let rootPost = null;
+          let lastPost = null;
           
-          const blueskyUri = response.uri;
-          console.log(`   ✓ Posted to Bluesky!${mediaInfo}`);
-          console.log(`   Bluesky URI: ${blueskyUri}`);
+          // Post all text chunks (if split due to length)
+          for (let i = 0; i < textChunks.length; i++) {
+            const chunk = textChunks[i];
+            const isFirstChunk = i === 0;
+            const chunkMedia = isFirstChunk ? media : null; // Only attach media to first post
+            
+            let replyTo = null;
+            if (!isFirstChunk && lastPost) {
+              // This chunk is a reply to the previous chunk
+              replyTo = {
+                root: { uri: rootPost.uri, cid: rootPost.cid },
+                parent: { uri: lastPost.uri, cid: lastPost.cid }
+              };
+            }
+            
+            const response = await postToBluesky(
+              chunk,
+              chunkMedia,
+              blueskyHandle, 
+              blueskyAppPassword,
+              blueskyService,
+              replyTo
+            );
+            
+            if (isFirstChunk) {
+              rootPost = response;
+              console.log(`   ✓ Posted to Bluesky!${mediaInfo}`);
+              console.log(`   Bluesky URI: ${response.uri}`);
+            } else {
+              console.log(`   ✓ Posted chunk ${i + 1}/${textChunks.length} as thread`);
+            }
+            
+            lastPost = response;
+            
+            // Rate limiting between chunks
+            if (i < textChunks.length - 1) {
+              await new Promise(resolve => setTimeout(resolve, 1000));
+            }
+          }
           
-          // Log the mapping
+          // Now post any Twitter thread continuations
+          for (let i = 0; i < threadReplies.length; i++) {
+            const replyTweet = threadReplies[i];
+            const replyTweetId = replyTweet.id;
+            
+            // Skip if already posted
+            if (crosspostLog.mappings[twitterUsername][replyTweetId]) {
+              console.log(`   ⊘ Thread reply ${replyTweetId} already posted, skipping`);
+              continue;
+            }
+            
+            const replyText = cleanTweetText(replyTweet.text || '', replyTweet);
+            const replyChunks = splitTextForThreading(replyText);
+            
+            // Process media for reply
+            let replyMedia = null;
+            try {
+              replyMedia = await processMediaFromTweet(replyTweet);
+            } catch (error) {
+              console.error(`   ⚠️  Failed to process reply media: ${error.message}`);
+            }
+            
+            // Post all chunks of this reply
+            for (let j = 0; j < replyChunks.length; j++) {
+              const replyChunk = replyChunks[j];
+              const isFirstReplyChunk = j === 0;
+              const replyChunkMedia = isFirstReplyChunk ? replyMedia : null;
+              
+              const replyTo = {
+                root: { uri: rootPost.uri, cid: rootPost.cid },
+                parent: { uri: lastPost.uri, cid: lastPost.cid }
+              };
+              
+              const replyResponse = await postToBluesky(
+                replyChunk,
+                replyChunkMedia,
+                blueskyHandle,
+                blueskyAppPassword,
+                blueskyService,
+                replyTo
+              );
+              
+              if (isFirstReplyChunk && replyChunks.length === 1) {
+                console.log(`   ✓ Posted thread reply ${i + 1}/${threadReplies.length}`);
+              } else if (isFirstReplyChunk) {
+                console.log(`   ✓ Posted thread reply ${i + 1}/${threadReplies.length} (chunk ${j + 1}/${replyChunks.length})`);
+              } else {
+                console.log(`   ✓ Posted chunk ${j + 1}/${replyChunks.length} of thread reply`);
+              }
+              
+              lastPost = replyResponse;
+              
+              // Rate limiting
+              await new Promise(resolve => setTimeout(resolve, 1000));
+            }
+            
+            // Log the thread reply
+            crosspostLog.mappings[twitterUsername][replyTweetId] = {
+              blueskyUri: lastPost.uri,
+              blueskyHandle: blueskyHandle,
+              text: replyText,
+              hasMedia: replyMedia !== null,
+              mediaType: replyMedia?.type,
+              parentTweetId: tweetId,
+              chunks: replyChunks.length,
+              timestamp: new Date().toISOString()
+            };
+            await saveCrosspostLog();
+          }
+          
+          // Log the root tweet mapping
           crosspostLog.mappings[twitterUsername][tweetId] = {
-            blueskyUri: blueskyUri,
+            blueskyUri: rootPost.uri,
             blueskyHandle: blueskyHandle,
             text: cleanedText,
             hasMedia: media !== null,
             mediaType: media?.type,
+            chunks: textChunks.length,
+            threadReplies: threadReplies.length,
             timestamp: new Date().toISOString()
           };
           await saveCrosspostLog();
           
-          // Rate limiting - wait a bit between posts
+          // Rate limiting - wait a bit between root tweets
           await new Promise(resolve => setTimeout(resolve, 2000));
         } catch (error) {
           console.error(`   ✗ Failed to post: ${error.message}`);
