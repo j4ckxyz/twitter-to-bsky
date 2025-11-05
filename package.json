@@ -1,0 +1,19 @@
+{
+  "name": "twitter-to-bsky",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "test": "node test.js",
+    "demo": "node demo.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "Crosspost Twitter accounts to Bluesky",
+  "dependencies": {
+    "@atproto/api": "^0.17.7",
+    "emusks": "^0.0.3"
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "twitter": {
+    "authToken": "your_twitter_auth_token_here"
+  },
+  "crosspostMappings": [
+    {
+      "twitterUsername": "elonmusk",
+      "blueskyHandle": "elon.bsky.social",
+      "blueskyAppPassword": "xxxx-xxxx-xxxx-xxxx"
+    },
+    {
+      "twitterUsername": "sama",
+      "blueskyHandle": "sam.bsky.social",
+      "blueskyAppPassword": "yyyy-yyyy-yyyy-yyyy"
+    }
+  ],
+  "options": {
+    "dryRun": true,
+    "maxTweetsPerCheck": 20,
+    "includeReplies": false,
+    "includeRetweets": false,
+    "includeQuoteTweets": false
+  }
+}
