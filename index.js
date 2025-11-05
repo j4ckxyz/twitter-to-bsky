@@ -173,9 +173,9 @@ function cleanTweetText(text, tweet) {
     if (isMediaUrl) {
       // Remove media URLs completely
       cleanedText = cleanedText.replace(tcoUrl, '').trim();
-    } else if (expandedUrl) {
-      // Replace t.co URL with expanded URL for actual links
-      cleanedText = cleanedText.replace(tcoUrl, expandedUrl);
+    } else {
+      // Remove external link URLs too - they'll be shown in OpenGraph card or as facets
+      cleanedText = cleanedText.replace(tcoUrl, '').trim();
     }
   }
   
@@ -441,20 +441,52 @@ async function postToBluesky(text, media, blueskyHandle, blueskyAppPassword, blu
         };
         
       } else if (media.type === 'video') {
-        // Upload video
-        const uploadResponse = await agent.uploadBlob(media.data.buffer, {
+        // Upload video using dedicated video upload endpoint
+        const uploadResponse = await agent.uploadVideo(media.data.buffer, {
           encoding: 'video/mp4',
         });
         
-        embed = {
-          $type: 'app.bsky.embed.video',
-          video: uploadResponse.data.blob,
-          aspectRatio: {
-            width: media.data.width,
-            height: media.data.height,
-          },
-          alt: '',
-        };
+        const jobStatus = uploadResponse.data.jobStatus;
+        console.log(`    📹 Video upload job started: ${jobStatus.jobId}`);
+        
+        // Poll for job completion
+        let finalBlob = null;
+        let attempts = 0;
+        const maxAttempts = 60; // Wait up to 60 seconds
+        
+        while (attempts < maxAttempts) {
+          const statusResponse = await agent.app.bsky.video.getJobStatus({ jobId: jobStatus.jobId });
+          const status = statusResponse.data.jobStatus;
+          
+          if (status.state === 'JOB_STATE_COMPLETED') {
+            console.log(`    ✓ Video processing complete`);
+            finalBlob = status.blob;
+            break;
+          } else if (status.state === 'JOB_STATE_FAILED') {
+            console.error(`    ✗ Video processing failed: ${status.error || status.message}`);
+            break;
+          } else {
+            // Still processing
+            const progress = status.progress ? `${Math.round(status.progress * 100)}%` : 'processing';
+            console.log(`    ⏳ Video processing: ${progress}`);
+            await new Promise(resolve => setTimeout(resolve, 1000)); // Wait 1 second
+            attempts++;
+          }
+        }
+        
+        if (!finalBlob) {
+          console.error(`    ✗ Video upload timed out or failed`);
+        } else {
+          embed = {
+            $type: 'app.bsky.embed.video',
+            video: finalBlob,
+            aspectRatio: {
+              width: media.data.width,
+              height: media.data.height,
+            },
+            alt: '',
+          };
+        }
       }
     } else if (externalLink) {
       // No media, but we have an external link - create OpenGraph card embed
