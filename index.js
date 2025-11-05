@@ -1,5 +1,5 @@
 import emusks from 'emusks';
-import { BskyAgent } from '@atproto/api';
+import { BskyAgent, RichText } from '@atproto/api';
 import fs from 'fs/promises';
 import { existsSync } from 'fs';
 import sizeOf from 'image-size';
@@ -88,40 +88,55 @@ function getImageDimensions(buffer) {
   }
 }
 
-// Function to clean tweet text by removing media-only t.co links
+// Function to clean tweet text and expand URLs
 function cleanTweetText(text, tweet) {
-  if (!text || !tweet.media || tweet.media.length === 0) {
-    return text;
-  }
-  
-  // Extract all t.co URLs from the text
-  const tcoUrlPattern = /https:\/\/t\.co\/[a-zA-Z0-9]+/g;
-  const tcoUrls = text.match(tcoUrlPattern) || [];
-  
-  // If there are no t.co URLs, return as is
-  if (tcoUrls.length === 0) {
+  if (!text) {
     return text;
   }
   
   let cleanedText = text;
   
-  // Remove each t.co URL from the text
-  for (const url of tcoUrls) {
-    cleanedText = cleanedText.replace(url, '').trim();
+  // Get media URLs from the tweet if present
+  const mediaUrls = new Set();
+  if (tweet.media && tweet.media.length > 0) {
+    tweet.media.forEach(m => {
+      if (m.url) mediaUrls.add(m.url);
+      if (m.expanded_url) mediaUrls.add(m.expanded_url);
+    });
   }
   
-  // Clean up extra whitespace
-  cleanedText = cleanedText.replace(/\s+/g, ' ').trim();
+  // Get all URL entities from the tweet
+  const urlEntities = tweet.urls || [];
   
-  // If the text is now empty or only whitespace, and we have media, 
-  // it means the tweet was media-only
-  if (!cleanedText || cleanedText.length === 0) {
-    return ''; // Return empty string for media-only posts
+  // Process each URL entity
+  for (const urlEntity of urlEntities) {
+    const tcoUrl = urlEntity.url; // The t.co shortened URL
+    const expandedUrl = urlEntity.expanded_url; // The real URL
+    
+    // Check if this t.co URL is for media (should be removed)
+    const isMediaUrl = mediaUrls.has(tcoUrl) || 
+                       mediaUrls.has(expandedUrl) ||
+                       (expandedUrl && (
+                         expandedUrl.includes('pic.twitter.com') ||
+                         expandedUrl.includes('pbs.twimg.com')
+                       ));
+    
+    if (isMediaUrl) {
+      // Remove media URLs completely
+      cleanedText = cleanedText.replace(tcoUrl, '').trim();
+    } else if (expandedUrl) {
+      // Replace t.co URL with expanded URL for actual links
+      cleanedText = cleanedText.replace(tcoUrl, expandedUrl);
+    }
   }
   
-  // If removing the URLs left us with actual content, return the cleaned text
-  // Otherwise return the original (in case the URL wasn't just for media)
-  return cleanedText.length > 0 ? cleanedText : text;
+  // Clean up extra whitespace and common trailing phrases
+  cleanedText = cleanedText
+    .replace(/\s+/g, ' ')
+    .replace(/\s+(and this (image|video|gif))?\s*$/i, '')
+    .trim();
+  
+  return cleanedText;
 }
 
 // Function to process media from tweet
@@ -336,9 +351,14 @@ async function postToBluesky(text, media, blueskyHandle, blueskyAppPassword, blu
       }
     }
     
+    // Use RichText to detect facets (links, mentions, hashtags)
+    const rt = new RichText({ text });
+    await rt.detectFacets(agent);
+    
     // Build post record
     const postRecord = {
-      text: text,
+      text: rt.text,
+      facets: rt.facets,
       createdAt: new Date().toISOString(),
     };
     

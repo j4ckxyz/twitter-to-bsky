@@ -7,8 +7,9 @@ A tool that automatically crossposts Twitter accounts to Bluesky using the emusk
 - Crosspost multiple Twitter accounts to multiple Bluesky accounts
 - **Thread support**: Automatically detects and crossposts Twitter threads
 - **Auto-threading**: Splits long posts (>300 chars) into threaded posts on Bluesky
+- **Smart link handling**: Expands t.co links to real URLs, removes media links
+- **Rich text facets**: Automatically detects and formats links, hashtags, and mentions
 - Support for images (with proper aspect ratios) and videos
-- Automatic removal of t.co links from media-only posts
 - Filter out replies, retweets, and quote tweets
 - Track posted tweets to avoid duplicates
 - Interactive configuration tool for easy setup
@@ -179,6 +180,10 @@ To automatically crosspost at regular intervals, set up a cron job (Linux/Mac) o
 - Each run checks for new tweets and posts them to Bluesky
 - **Threads**: When a tweet is a reply to itself (thread continuation), it will be posted as a threaded reply on Bluesky
 - **Long posts**: Posts longer than 300 characters are automatically split and posted as threads
+- **Links**: 
+  - t.co links for media (images/videos) are automatically removed
+  - t.co links for articles/websites are expanded to their real URLs
+  - All links, hashtags, and mentions are properly formatted using AT Protocol facets
 - Set up a cron job or task scheduler to run this periodically
 - Rate limiting: 1-2 second delays between posts to avoid hitting API limits
 
