@@ -3,6 +3,7 @@ import { BskyAgent, RichText } from '@atproto/api';
 import fs from 'fs/promises';
 import { existsSync } from 'fs';
 import sizeOf from 'image-size';
+import ogs from 'open-graph-scraper';
 
 // Load configuration
 let config;
@@ -88,6 +89,54 @@ function getImageDimensions(buffer) {
   }
 }
 
+// Function to fetch OpenGraph metadata and thumbnail for external link embeds
+async function fetchOpenGraphData(url, agent) {
+  try {
+    console.log(`    🔗 Fetching OpenGraph data for: ${url}`);
+    
+    const { result } = await ogs({ url });
+    
+    if (!result.success) {
+      console.log(`    ⚠️  OpenGraph fetch failed for ${url}`);
+      return null;
+    }
+    
+    const ogData = {
+      uri: url,
+      title: result.ogTitle || result.twitterTitle || 'Link',
+      description: result.ogDescription || result.twitterDescription || '',
+    };
+    
+    // Try to get thumbnail image
+    const imageUrl = result.ogImage?.[0]?.url || result.twitterImage?.[0]?.url;
+    
+    if (imageUrl) {
+      try {
+        // Download the thumbnail
+        const thumbBuffer = await downloadFile(imageUrl);
+        
+        // Upload to Bluesky
+        const uploadResponse = await agent.uploadBlob(thumbBuffer, {
+          encoding: 'image/jpeg', // Most OG images are JPEG
+        });
+        
+        ogData.thumb = uploadResponse.data.blob;
+        console.log(`    ✓ Uploaded OpenGraph thumbnail`);
+      } catch (thumbError) {
+        console.log(`    ⚠️  Failed to fetch/upload thumbnail: ${thumbError.message}`);
+        // Continue without thumbnail
+      }
+    }
+    
+    console.log(`    ✓ OpenGraph data: "${ogData.title}"`);
+    return ogData;
+    
+  } catch (error) {
+    console.log(`    ⚠️  Error fetching OpenGraph data: ${error.message}`);
+    return null;
+  }
+}
+
 // Function to clean tweet text and expand URLs
 function cleanTweetText(text, tweet) {
   if (!text) {
@@ -137,6 +186,40 @@ function cleanTweetText(text, tweet) {
     .trim();
   
   return cleanedText;
+}
+
+// Function to extract the first external link from text
+function extractExternalLink(text, tweet) {
+  // Get all URL entities from the tweet
+  const urlEntities = tweet.urls || [];
+  
+  // Get media URLs to exclude
+  const mediaUrls = new Set();
+  if (tweet.media && tweet.media.length > 0) {
+    tweet.media.forEach(m => {
+      if (m.url) mediaUrls.add(m.url);
+      if (m.expanded_url) mediaUrls.add(m.expanded_url);
+    });
+  }
+  
+  // Find first non-media URL
+  for (const urlEntity of urlEntities) {
+    const expandedUrl = urlEntity.expanded_url;
+    
+    // Skip media URLs
+    const isMediaUrl = mediaUrls.has(urlEntity.url) || 
+                       mediaUrls.has(expandedUrl) ||
+                       (expandedUrl && (
+                         expandedUrl.includes('pic.twitter.com') ||
+                         expandedUrl.includes('pbs.twimg.com')
+                       ));
+    
+    if (!isMediaUrl && expandedUrl) {
+      return expandedUrl;
+    }
+  }
+  
+  return null;
 }
 
 // Function to process media from tweet
@@ -200,11 +283,30 @@ async function processMediaFromTweet(tweet) {
             return null;
           }
           
+          // Extract dimensions from video URL (format: /vid/WIDTHxHEIGHT/)
+          // or use metadata if available
+          let width = 1280;
+          let height = 720;
+          
+          const dimensionsMatch = videoUrl.match(/\/vid\/(\d+)x(\d+)\//);
+          if (dimensionsMatch) {
+            width = parseInt(dimensionsMatch[1], 10);
+            height = parseInt(dimensionsMatch[2], 10);
+          } else if (video.sizes?.large) {
+            width = video.sizes.large.w;
+            height = video.sizes.large.h;
+          } else if (video.original_info) {
+            width = video.original_info.width;
+            height = video.original_info.height;
+          }
+          
           return {
             type: 'video',
             data: {
               buffer,
               duration: durationMs,
+              width,
+              height,
             },
           };
         } catch (error) {
@@ -304,7 +406,7 @@ function splitTextForThreading(text, maxLength = 300) {
 }
 
 // Function to post to Bluesky with optional threading support
-async function postToBluesky(text, media, blueskyHandle, blueskyAppPassword, blueskyService = 'https://bsky.social', replyTo = null) {
+async function postToBluesky(text, media, blueskyHandle, blueskyAppPassword, blueskyService = 'https://bsky.social', replyTo = null, externalLink = null) {
   const agent = new BskyAgent({ service: blueskyService });
   
   try {
@@ -315,7 +417,7 @@ async function postToBluesky(text, media, blueskyHandle, blueskyAppPassword, blu
     
     let embed = undefined;
     
-    // Upload media if present
+    // Upload media if present (media takes priority over external links)
     if (media) {
       if (media.type === 'images') {
         // Upload images and create embed
@@ -347,6 +449,21 @@ async function postToBluesky(text, media, blueskyHandle, blueskyAppPassword, blu
         embed = {
           $type: 'app.bsky.embed.video',
           video: uploadResponse.data.blob,
+          aspectRatio: {
+            width: media.data.width,
+            height: media.data.height,
+          },
+          alt: '',
+        };
+      }
+    } else if (externalLink) {
+      // No media, but we have an external link - create OpenGraph card embed
+      const ogData = await fetchOpenGraphData(externalLink, agent);
+      
+      if (ogData) {
+        embed = {
+          $type: 'app.bsky.embed.external',
+          external: ogData,
         };
       }
     }
@@ -498,6 +615,12 @@ async function processTweetsForAccount(mapping) {
       // Clean the tweet text (remove t.co links if they're only for media)
       const cleanedText = cleanTweetText(tweetText, tweet);
       
+      // Extract external link for OpenGraph card embed (if no media present)
+      const externalLink = !media ? extractExternalLink(cleanedText, tweet) : null;
+      if (externalLink) {
+        console.log(`   🔗 Found external link: ${externalLink}`);
+      }
+      
       // Check if we need to split into multiple posts
       const textChunks = splitTextForThreading(cleanedText);
       const needsThreading = textChunks.length > 1;
@@ -554,6 +677,7 @@ async function processTweetsForAccount(mapping) {
             const chunk = textChunks[i];
             const isFirstChunk = i === 0;
             const chunkMedia = isFirstChunk ? media : null; // Only attach media to first post
+            const chunkExternalLink = isFirstChunk ? externalLink : null; // Only attach external link to first post
             
             let replyTo = null;
             if (!isFirstChunk && lastPost) {
@@ -570,7 +694,8 @@ async function processTweetsForAccount(mapping) {
               blueskyHandle, 
               blueskyAppPassword,
               blueskyService,
-              replyTo
+              replyTo,
+              chunkExternalLink
             );
             
             if (isFirstChunk) {
@@ -611,11 +736,15 @@ async function processTweetsForAccount(mapping) {
               console.error(`   ⚠️  Failed to process reply media: ${error.message}`);
             }
             
+            // Extract external link for reply (if no media present)
+            const replyExternalLink = !replyMedia ? extractExternalLink(replyText, replyTweet) : null;
+            
             // Post all chunks of this reply
             for (let j = 0; j < replyChunks.length; j++) {
               const replyChunk = replyChunks[j];
               const isFirstReplyChunk = j === 0;
               const replyChunkMedia = isFirstReplyChunk ? replyMedia : null;
+              const replyChunkExternalLink = isFirstReplyChunk ? replyExternalLink : null;
               
               const replyTo = {
                 root: { uri: rootPost.uri, cid: rootPost.cid },
@@ -628,7 +757,8 @@ async function processTweetsForAccount(mapping) {
                 blueskyHandle,
                 blueskyAppPassword,
                 blueskyService,
-                replyTo
+                replyTo,
+                replyChunkExternalLink
               );
               
               if (isFirstReplyChunk && replyChunks.length === 1) {

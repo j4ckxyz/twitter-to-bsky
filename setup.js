@@ -118,8 +118,17 @@ async function addMapping(config) {
     {
       type: 'text',
       name: 'blueskyService',
-      message: 'Bluesky PDS URL:',
-      initial: 'https://bsky.social'
+      message: 'Bluesky PDS URL (press Enter for default):',
+      initial: 'https://bsky.social',
+      format: value => {
+        // If empty or invalid, default to bsky.social
+        if (!value || value.trim() === '') return 'https://bsky.social';
+        // Ensure it starts with http:// or https://
+        if (!value.startsWith('http://') && !value.startsWith('https://')) {
+          return 'https://bsky.social';
+        }
+        return value.trim();
+      }
     }
   ]);
   
@@ -221,8 +230,17 @@ async function editMapping(config) {
     {
       type: 'text',
       name: 'blueskyService',
-      message: 'Bluesky PDS URL:',
-      initial: mapping.blueskyService || 'https://bsky.social'
+      message: 'Bluesky PDS URL (press Enter for default):',
+      initial: mapping.blueskyService || 'https://bsky.social',
+      format: value => {
+        // If empty or invalid, default to bsky.social
+        if (!value || value.trim() === '') return 'https://bsky.social';
+        // Ensure it starts with http:// or https://
+        if (!value.startsWith('http://') && !value.startsWith('https://')) {
+          return 'https://bsky.social';
+        }
+        return value.trim();
+      }
     }
   ]);
   

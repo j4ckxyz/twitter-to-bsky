@@ -6,19 +6,18 @@
   "scripts": {
     "start": "node index.js",
     "setup": "node setup.js",
-    "config": "node setup.js",
-    "test": "node test.js",
-    "demo": "node demo.js"
+    "config": "node setup.js"
   },
   "keywords": [],
   "author": "",
-  "license": "ISC",
+  "license": "MIT",
   "description": "Crosspost Twitter accounts to Bluesky",
   "dependencies": {
     "@atproto/api": "^0.17.7",
     "chalk": "^5.6.2",
     "emusks": "^0.0.3",
     "image-size": "^2.0.2",
+    "open-graph-scraper": "^6.10.0",
     "prompts": "^2.4.2"
   }
 }

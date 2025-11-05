@@ -4,3 +4,12 @@ crosspost-log.json
 posted-tweets.json
 .env
 *.log
+
+# Test files
+test*.js
+test*.jpg
+test*.mp4
+test*.png
+demo.js
+mock*.js
+*.sync-conflict-*
