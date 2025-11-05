@@ -5,6 +5,8 @@
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
+    "setup": "node setup.js",
+    "config": "node setup.js",
     "test": "node test.js",
     "demo": "node demo.js"
   },
@@ -14,7 +16,9 @@
   "description": "Crosspost Twitter accounts to Bluesky",
   "dependencies": {
     "@atproto/api": "^0.17.7",
+    "chalk": "^5.6.2",
     "emusks": "^0.0.3",
-    "image-size": "^2.0.2"
+    "image-size": "^2.0.2",
+    "prompts": "^2.4.2"
   }
 }
