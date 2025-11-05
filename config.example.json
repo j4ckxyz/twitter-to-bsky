@@ -6,12 +6,14 @@
     {
       "twitterUsername": "elonmusk",
       "blueskyHandle": "elon.bsky.social",
-      "blueskyAppPassword": "xxxx-xxxx-xxxx-xxxx"
+      "blueskyAppPassword": "xxxx-xxxx-xxxx-xxxx",
+      "blueskyService": "https://bsky.social"
     },
     {
       "twitterUsername": "sama",
-      "blueskyHandle": "sam.bsky.social",
-      "blueskyAppPassword": "yyyy-yyyy-yyyy-yyyy"
+      "blueskyHandle": "sam.example.com",
+      "blueskyAppPassword": "yyyy-yyyy-yyyy-yyyy",
+      "blueskyService": "https://pds.example.com"
     }
   ],
   "options": {

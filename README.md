@@ -99,6 +99,8 @@ To automatically crosspost at regular intervals, set up a cron job (Linux/Mac) o
   - `twitterUsername`: Twitter account to monitor
   - `blueskyHandle`: Bluesky handle to post to (e.g., username.bsky.social)
   - `blueskyAppPassword`: Bluesky app password for authentication
+  - `blueskyService`: (Optional) Custom PDS URL (defaults to https://bsky.social)
+- `options.dryRun`: Run without actually posting to Bluesky (default: true)
 - `options.maxTweetsPerCheck`: Maximum number of recent tweets to check (default: 20)
 - `options.includeReplies`: Whether to crosspost replies (default: false)
 - `options.includeRetweets`: Whether to crosspost retweets (default: false)
