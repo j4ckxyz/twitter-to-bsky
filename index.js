@@ -145,16 +145,22 @@ function cleanTweetText(text, tweet) {
   
   let cleanedText = text;
   
-  // Get media URLs from the tweet if present
+  // Get media URLs from the tweet if present and remove them from text
   const mediaUrls = new Set();
   if (tweet.media && tweet.media.length > 0) {
     tweet.media.forEach(m => {
-      if (m.url) mediaUrls.add(m.url);
-      if (m.expanded_url) mediaUrls.add(m.expanded_url);
+      if (m.url) {
+        mediaUrls.add(m.url);
+        // Remove media t.co link from text directly
+        cleanedText = cleanedText.replace(m.url, '').trim();
+      }
+      if (m.expanded_url) {
+        mediaUrls.add(m.expanded_url);
+      }
     });
   }
   
-  // Get all URL entities from the tweet
+  // Get all URL entities from the tweet and remove them
   const urlEntities = tweet.urls || [];
   
   // Process each URL entity
