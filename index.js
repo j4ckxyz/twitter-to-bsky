@@ -51,6 +51,93 @@ try {
   process.exit(1);
 }
 
+// Function to download file from URL
+async function downloadFile(url) {
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(`Failed to download: ${response.statusText}`);
+  }
+  const arrayBuffer = await response.arrayBuffer();
+  return Buffer.from(arrayBuffer);
+}
+
+// Function to process media from tweet
+async function processMediaFromTweet(tweet) {
+  if (!tweet.media || tweet.media.length === 0) {
+    return null;
+  }
+  
+  const images = tweet.media.filter(m => m.type === 'photo');
+  const videos = tweet.media.filter(m => m.type === 'video' || m.type === 'animated_gif');
+  
+  // Bluesky supports either up to 4 images OR 1 video
+  if (images.length > 0 && images.length <= 4) {
+    // Download images
+    const imageData = [];
+    for (const img of images.slice(0, 4)) {
+      try {
+        const imageUrl = img.media_url_https || img.url;
+        const buffer = await downloadFile(imageUrl);
+        imageData.push({
+          buffer,
+          alt: '', // Could extract from tweet text if available
+        });
+      } catch (error) {
+        console.error(`    ⚠️  Failed to download image: ${error.message}`);
+      }
+    }
+    
+    if (imageData.length > 0) {
+      return { type: 'images', data: imageData };
+    }
+  } else if (videos.length > 0) {
+    // Get the first video
+    const video = videos[0];
+    
+    if (video.video_info?.variants) {
+      // Get highest quality MP4 variant
+      const mp4Variants = video.video_info.variants
+        .filter(v => v.content_type === 'video/mp4')
+        .sort((a, b) => (b.bitrate || 0) - (a.bitrate || 0));
+      
+      if (mp4Variants.length > 0) {
+        try {
+          const videoUrl = mp4Variants[0].url;
+          const buffer = await downloadFile(videoUrl);
+          const sizeMB = buffer.length / (1024 * 1024);
+          const durationMs = video.video_info.duration_millis || 0;
+          const durationMin = durationMs / (1000 * 60);
+          
+          // Check Bluesky constraints: 100MB max, ~3 minutes max
+          if (sizeMB > 100) {
+            console.error(`    ⚠️  Video too large: ${sizeMB.toFixed(2)}MB (max 100MB)`);
+            return null;
+          }
+          
+          if (durationMin > 3) {
+            console.error(`    ⚠️  Video too long: ${durationMin.toFixed(2)}min (max ~3min)`);
+            return null;
+          }
+          
+          return {
+            type: 'video',
+            data: {
+              buffer,
+              duration: durationMs,
+            },
+          };
+        } catch (error) {
+          console.error(`    ⚠️  Failed to download video: ${error.message}`);
+        }
+      }
+    }
+  } else if (images.length > 4) {
+    console.log(`    ⚠️  Tweet has ${images.length} images (max 4), will link to tweet instead`);
+  }
+  
+  return null;
+}
+
 // Function to get skip reason
 function getSkipReason(tweet) {
   // Check for replies - tweet has in_reply_to_status_id field
@@ -73,7 +160,7 @@ function getSkipReason(tweet) {
 }
 
 // Function to post to Bluesky
-async function postToBluesky(text, blueskyHandle, blueskyAppPassword, blueskyService = 'https://bsky.social') {
+async function postToBluesky(text, media, blueskyHandle, blueskyAppPassword, blueskyService = 'https://bsky.social') {
   const agent = new BskyAgent({ service: blueskyService });
   
   try {
@@ -82,8 +169,46 @@ async function postToBluesky(text, blueskyHandle, blueskyAppPassword, blueskySer
       password: blueskyAppPassword,
     });
     
+    let embed = undefined;
+    
+    // Upload media if present
+    if (media) {
+      if (media.type === 'images') {
+        // Upload images and create embed
+        const uploadedImages = [];
+        
+        for (const img of media.data) {
+          const uploadResponse = await agent.uploadBlob(img.buffer, {
+            encoding: 'image/jpeg',
+          });
+          
+          uploadedImages.push({
+            alt: img.alt,
+            image: uploadResponse.data.blob,
+          });
+        }
+        
+        embed = {
+          $type: 'app.bsky.embed.images',
+          images: uploadedImages,
+        };
+        
+      } else if (media.type === 'video') {
+        // Upload video
+        const uploadResponse = await agent.uploadBlob(media.data.buffer, {
+          encoding: 'video/mp4',
+        });
+        
+        embed = {
+          $type: 'app.bsky.embed.video',
+          video: uploadResponse.data.blob,
+        };
+      }
+    }
+    
     const response = await agent.post({
       text: text,
+      embed: embed,
       createdAt: new Date().toISOString(),
     });
     
@@ -193,27 +318,49 @@ async function processTweetsForAccount(mapping) {
       console.log(`\n📝 Tweet ID: ${tweetId}`);
       console.log(`   Text: "${preview}"`);
       
+      // Process media
+      let media = null;
+      let mediaInfo = '';
+      try {
+        media = await processMediaFromTweet(tweet);
+        if (media) {
+          if (media.type === 'images') {
+            mediaInfo = ` [${media.data.length} image(s)]`;
+            console.log(`   📷 Downloading ${media.data.length} image(s)...`);
+          } else if (media.type === 'video') {
+            const sizeMB = media.data.buffer.length / (1024 * 1024);
+            mediaInfo = ` [video: ${sizeMB.toFixed(2)}MB]`;
+            console.log(`   🎥 Downloading video (${sizeMB.toFixed(2)}MB)...`);
+          }
+        }
+      } catch (error) {
+        console.error(`   ⚠️  Failed to process media: ${error.message}`);
+      }
+      
       if (isDryRun) {
-        console.log(`   ⚠️  DRY RUN: Would post to @${blueskyHandle}`);
+        console.log(`   ⚠️  DRY RUN: Would post to @${blueskyHandle}${mediaInfo}`);
         
         // In dry run, mark as "would be posted"
         crosspostLog.mappings[twitterUsername][tweetId] = {
           dryRun: true,
           text: tweetText,
+          hasMedia: media !== null,
+          mediaType: media?.type,
           timestamp: new Date().toISOString()
         };
         await saveCrosspostLog();
       } else {
         try {
           const response = await postToBluesky(
-            tweetText, 
+            tweetText,
+            media,
             blueskyHandle, 
             blueskyAppPassword,
             blueskyService
           );
           
           const blueskyUri = response.uri;
-          console.log(`   ✓ Posted to Bluesky!`);
+          console.log(`   ✓ Posted to Bluesky!${mediaInfo}`);
           console.log(`   Bluesky URI: ${blueskyUri}`);
           
           // Log the mapping
@@ -221,6 +368,8 @@ async function processTweetsForAccount(mapping) {
             blueskyUri: blueskyUri,
             blueskyHandle: blueskyHandle,
             text: tweetText,
+            hasMedia: media !== null,
+            mediaType: media?.type,
             timestamp: new Date().toISOString()
           };
           await saveCrosspostLog();
