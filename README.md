@@ -120,6 +120,38 @@ The tool uses `config.json` to manage your settings. You can edit it manually or
 - **includeRetweets** - Crosspost retweets (default: false)
 - **includeQuoteTweets** - Crosspost quote tweets (default: false)
 
+## Managing Accounts
+
+### Adding an Account
+
+To add a new Twitter→Bluesky crosspost mapping:
+
+```bash
+npm run setup
+# Select "Add new account mapping"
+# Follow the prompts to enter:
+#   - Twitter username
+#   - Bluesky handle
+#   - Bluesky app password
+#   - Bluesky PDS URL (or press Enter for default bsky.social)
+```
+
+### Editing or Removing Accounts
+
+```bash
+npm run setup
+# Select "Edit account mapping" or "Remove account mapping"
+# Choose the account from the list
+```
+
+### Setting Twitter Auth Token
+
+```bash
+npm run setup
+# Select "Set Twitter auth token"
+# Paste your auth_token from x.com cookies (see Getting Authentication Credentials)
+```
+
 ## Scheduling Automatic Crossposting
 
 To automatically crosspost at regular intervals, set up a cron job or scheduled task.
@@ -216,10 +248,17 @@ The tool intelligently processes links:
 **Example:**
 
 Twitter: `"Check this out: https://t.co/abc123 https://t.co/img456"`
-- First link → Article URL (creates preview card)
-- Second link → Image (removed from text, shown as media)
+- First link → Article URL (kept as clickable link)
+- Second link → Image (removed from text, shown as media embed)
 
-Bluesky: `"Check this out: https://example.com/article"` + image embed + link preview card
+Bluesky: `"Check this out: https://example.com/article"` + image embed  
+*Note: Link is clickable but shown as text, not as an OpenGraph card (media takes priority)*
+
+**Without media:**
+
+Twitter: `"Check this out: https://t.co/abc123"`
+
+Bluesky: Post with full OpenGraph link preview card (title, description, thumbnail)
 
 ### Auto-Splitting Long Posts
 
