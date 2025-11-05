@@ -2,6 +2,7 @@ import emusks from 'emusks';
 import { BskyAgent } from '@atproto/api';
 import fs from 'fs/promises';
 import { existsSync } from 'fs';
+import sizeOf from 'image-size';
 
 // Load configuration
 let config;
@@ -61,6 +62,68 @@ async function downloadFile(url) {
   return Buffer.from(arrayBuffer);
 }
 
+// Function to get image dimensions
+function getImageDimensions(buffer) {
+  try {
+    const dimensions = sizeOf(buffer);
+    return {
+      width: dimensions.width,
+      height: dimensions.height,
+      aspectRatio: {
+        width: dimensions.width,
+        height: dimensions.height
+      }
+    };
+  } catch (error) {
+    console.error(`    ⚠️  Failed to get image dimensions: ${error.message}`);
+    // Return default aspect ratio if we can't determine it
+    return {
+      width: 1000,
+      height: 1000,
+      aspectRatio: {
+        width: 1,
+        height: 1
+      }
+    };
+  }
+}
+
+// Function to clean tweet text by removing media-only t.co links
+function cleanTweetText(text, tweet) {
+  if (!text || !tweet.media || tweet.media.length === 0) {
+    return text;
+  }
+  
+  // Extract all t.co URLs from the text
+  const tcoUrlPattern = /https:\/\/t\.co\/[a-zA-Z0-9]+/g;
+  const tcoUrls = text.match(tcoUrlPattern) || [];
+  
+  // If there are no t.co URLs, return as is
+  if (tcoUrls.length === 0) {
+    return text;
+  }
+  
+  let cleanedText = text;
+  
+  // Remove each t.co URL from the text
+  for (const url of tcoUrls) {
+    cleanedText = cleanedText.replace(url, '').trim();
+  }
+  
+  // Clean up extra whitespace
+  cleanedText = cleanedText.replace(/\s+/g, ' ').trim();
+  
+  // If the text is now empty or only whitespace, and we have media, 
+  // it means the tweet was media-only
+  if (!cleanedText || cleanedText.length === 0) {
+    return ''; // Return empty string for media-only posts
+  }
+  
+  // If removing the URLs left us with actual content, return the cleaned text
+  // Otherwise return the original (in case the URL wasn't just for media)
+  return cleanedText.length > 0 ? cleanedText : text;
+}
+
 // Function to process media from tweet
 async function processMediaFromTweet(tweet) {
   if (!tweet.media || tweet.media.length === 0) {
@@ -78,9 +141,12 @@ async function processMediaFromTweet(tweet) {
       try {
         const imageUrl = img.media_url_https || img.url;
         const buffer = await downloadFile(imageUrl);
+        const dimensions = getImageDimensions(buffer);
+        
         imageData.push({
           buffer,
           alt: '', // Could extract from tweet text if available
+          aspectRatio: dimensions.aspectRatio,
         });
       } catch (error) {
         console.error(`    ⚠️  Failed to download image: ${error.message}`);
@@ -185,6 +251,7 @@ async function postToBluesky(text, media, blueskyHandle, blueskyAppPassword, blu
           uploadedImages.push({
             alt: img.alt,
             image: uploadResponse.data.blob,
+            aspectRatio: img.aspectRatio,
           });
         }
         
@@ -311,14 +378,8 @@ async function processTweetsForAccount(mapping) {
     for (const tweet of tweetsToPost) {
       const tweetId = tweet.id;
       const tweetText = tweet.text || '';
-      const preview = tweetText.length > 80 
-        ? tweetText.substring(0, 80) + '...' 
-        : tweetText;
       
-      console.log(`\n📝 Tweet ID: ${tweetId}`);
-      console.log(`   Text: "${preview}"`);
-      
-      // Process media
+      // Process media first to determine if we should clean the text
       let media = null;
       let mediaInfo = '';
       try {
@@ -337,13 +398,22 @@ async function processTweetsForAccount(mapping) {
         console.error(`   ⚠️  Failed to process media: ${error.message}`);
       }
       
+      // Clean the tweet text (remove t.co links if they're only for media)
+      const cleanedText = cleanTweetText(tweetText, tweet);
+      const preview = cleanedText.length > 80 
+        ? cleanedText.substring(0, 80) + '...' 
+        : cleanedText;
+      
+      console.log(`\n📝 Tweet ID: ${tweetId}`);
+      console.log(`   Text: "${preview}"`);
+      
       if (isDryRun) {
         console.log(`   ⚠️  DRY RUN: Would post to @${blueskyHandle}${mediaInfo}`);
         
         // In dry run, mark as "would be posted"
         crosspostLog.mappings[twitterUsername][tweetId] = {
           dryRun: true,
-          text: tweetText,
+          text: cleanedText,
           hasMedia: media !== null,
           mediaType: media?.type,
           timestamp: new Date().toISOString()
@@ -352,7 +422,7 @@ async function processTweetsForAccount(mapping) {
       } else {
         try {
           const response = await postToBluesky(
-            tweetText,
+            cleanedText,
             media,
             blueskyHandle, 
             blueskyAppPassword,
@@ -367,7 +437,7 @@ async function processTweetsForAccount(mapping) {
           crosspostLog.mappings[twitterUsername][tweetId] = {
             blueskyUri: blueskyUri,
             blueskyHandle: blueskyHandle,
-            text: tweetText,
+            text: cleanedText,
             hasMedia: media !== null,
             mediaType: media?.type,
             timestamp: new Date().toISOString()

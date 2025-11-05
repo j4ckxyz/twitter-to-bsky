@@ -14,6 +14,7 @@
   "description": "Crosspost Twitter accounts to Bluesky",
   "dependencies": {
     "@atproto/api": "^0.17.7",
-    "emusks": "^0.0.3"
+    "emusks": "^0.0.3",
+    "image-size": "^2.0.2"
   }
 }
